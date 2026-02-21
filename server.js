@@ -74,7 +74,49 @@ function parseETH(ethString) {
  * txHash = transaction where you sent ETH to treasury
  * We verify it and forward to recipient (minus 5% fee)
  */
-app.post('/grants', async (req, res) => {
+
+// ============================================================================
+// WHITELIST MIDDLEWARE
+// ============================================================================
+
+let _whitelistCache = null;
+let _whitelistCacheTime = 0;
+const WHITELIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchWhitelist() {
+  const now = Date.now();
+  if (_whitelistCache && (now - _whitelistCacheTime) < WHITELIST_CACHE_TTL) {
+    return _whitelistCache;
+  }
+  try {
+    const res = await fetch('https://www.owockibot.xyz/api/whitelist');
+    const data = await res.json();
+    _whitelistCache = new Set(data.map(e => (e.address || e).toLowerCase()));
+    _whitelistCacheTime = now;
+    return _whitelistCache;
+  } catch (err) {
+    console.error('Whitelist fetch failed:', err.message);
+    if (_whitelistCache) return _whitelistCache;
+    return new Set();
+  }
+}
+
+function requireWhitelist(addressField = 'address') {
+  return async (req, res, next) => {
+    const addr = req.body?.[addressField] || req.body?.creator || req.body?.participant || req.body?.sender || req.body?.from || req.body?.address;
+    if (!addr) {
+      return res.status(400).json({ error: 'Address required' });
+    }
+    const whitelist = await fetchWhitelist();
+    if (!whitelist.has(addr.toLowerCase())) {
+      return res.status(403).json({ error: 'Invite-only. Tag @owockibot on X to request access.' });
+    }
+    next();
+  };
+}
+
+
+app.post('/grants', requireWhitelist(), async (req, res) => {
   const { recipient, amount, reason, txHash, grantor } = req.body;
   const isMock = req.query.mock === 'true';
 
